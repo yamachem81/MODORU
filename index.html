@@ -1,0 +1,428 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MODORU</title>
+<link rel="icon" type="image/png" href="modoru_192.png">
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    font-family: sans-serif;
+    background: #e8f2eb;
+    color: #202b25;
+    text-align: center;
+  }
+  body.near { background: #ffc5df; }
+  body.arrived { background: #f44343; color: white; }
+  h1 { font-size: 36px; }
+  #distance {
+    font-size: 42px;
+    font-weight: bold;
+    margin: 32px 0;
+  }
+  button {
+    font-size: 20px;
+    padding: 14px 24px;
+    margin: 8px;
+    border: none;
+    border-radius: 12px;
+    background: #263b34;
+    color: white;
+  }
+  #status { margin: 24px 0; }
+.place-item {
+  margin: 16px 0;
+  padding: 12px;
+  border-bottom: 1px solid #a5b8a9;
+}
+
+.place-button {
+  background: #2e7d32;
+  color: white;
+  font-size: 15px;
+  padding: 8px 16px;
+  margin: 4px;
+}
+  .top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px;
+  flex-wrap: wrap;
+}
+.brand {
+  background: #263b34;
+  color: white;
+  border-radius: 12px;
+  padding: 6px 16px;
+}
+.brand h1 {
+  font-size: 26px;
+  margin: 0;
+}
+
+.brand p {
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+.top-bar #distance {
+  font-size: 30px;
+  margin: 0;
+}
+
+.top-bar #status {
+  margin: 0;
+}
+
+.top-bar button {
+  margin: 0;
+  padding: 10px 18px;
+  font-size: 17px;
+}
+
+.content-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 12px;
+}
+
+#saved-places {
+  text-align: center;
+}
+
+#map {
+  height: calc(100vh - 160px);
+  min-height: 350px;
+  width: 100%;
+  border-radius: 12px;
+}
+
+@media (max-width: 650px) {
+  .content-layout {
+    grid-template-columns: 1fr;
+  }
+
+  #map {
+    height: 65vh;
+    order: 1;
+  }
+
+  #saved-places {
+    order: 2;
+  }
+}
+</style>
+</head>
+<body>
+
+<header class="top-bar">
+  <div class="brand">
+    <h1>MODORU</h1>
+    <p>Find Your Way Back.</p>
+  </div>
+
+  <div id="distance">-- m</div>
+  <p id="status">Getting GPS location...</p>
+  <button id="save">Save Here</button>
+</header>
+
+<div class="content-layout">
+  <section id="saved-places">
+    <h2>Saved Places</h2>
+    <div id="places-list"></div>
+  </section>
+
+  <div id="map"></div>
+</div>
+
+
+<script>
+const key = "modoru-place";
+const distanceEl = document.getElementById("distance");
+const statusEl = document.getElementById("status");
+const map = L.map("map").setView([35.0, 133.0], 13);
+
+L.tileLayer(
+  "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
+  {
+    attribution: "Map: GSI Japan",
+    maxZoom: 18
+  }
+).addTo(map);
+
+let currentMarker = null;
+
+
+function updateMap() {
+  if (current) {
+    const pos = [current.lat, current.lon];
+
+    if (currentMarker) {
+      currentMarker.setLatLng(pos);
+    } else {
+      currentMarker = L.circleMarker(pos, {
+        radius: 9,
+        color: "blue",
+        fillColor: "blue",
+        fillOpacity: 0.8
+      }).addTo(map).bindPopup("Current Location");
+
+      map.setView(pos, 16);
+    }
+  }
+
+
+}
+
+let current = null;
+let target = null;
+
+try {
+  target = JSON.parse(localStorage.getItem(key));
+} catch {
+  target = null;
+}
+
+const placesKey = "modoru-places";
+let places = [];
+
+try {
+  const saved = JSON.parse(localStorage.getItem(placesKey));
+  if (Array.isArray(saved)) places = saved;
+} catch {
+  places = [];
+}
+
+// Import the old single saved location once.
+if (target && places.length === 0) {
+  places.push({
+    id: crypto.randomUUID(),
+    name: "Saved Location",
+    lat: target.lat,
+    lon: target.lon,
+    color: "#e53935"
+  });
+  localStorage.setItem(placesKey, JSON.stringify(places));
+}
+
+const placeMarkers = new Map();
+
+function updatePlaceMarkers() {
+  const savedIds = new Set(places.map(place => place.id));
+
+  for (const [id, marker] of placeMarkers) {
+    if (!savedIds.has(id)) {
+      map.removeLayer(marker);
+      placeMarkers.delete(id);
+    }
+  }
+
+  places.forEach(place => {
+    let marker = placeMarkers.get(place.id);
+
+    if (!marker) {
+      const redIcon = L.divIcon({
+        html: '<div style="font-size:32px;line-height:1;">📍</div>',
+        className: "",
+        iconSize: [32, 40],
+        iconAnchor: [16, 38]
+      });
+
+      marker = L.marker([place.lat, place.lon], {
+        icon: redIcon,
+        zIndexOffset: 1000
+      }).bindPopup(place.name);
+
+      placeMarkers.set(place.id, marker);
+    }
+
+    marker.setLatLng([place.lat, place.lon]);
+    marker.setPopupContent(place.name);
+
+    if (place.visible === false) {
+      map.removeLayer(marker);
+    } else if (!map.hasLayer(marker)) {
+      marker.addTo(map);
+    }
+  });
+}
+function renderPlaces() {
+  const list = document.getElementById("places-list");
+  if (!list) return;
+
+  list.replaceChildren();
+
+  if (places.length === 0) {
+    list.textContent = "No saved places yet.";
+    return;
+  }
+
+  places.forEach(place => {
+    const item = document.createElement("div");
+    item.className = "place-item";
+
+  const name = document.createElement("p");
+name.textContent =
+  `${place.name} — ${place.lat.toFixed(6)}, ${place.lon.toFixed(6)}`;
+
+name.style.cursor = "pointer";
+
+name.onclick = () => {
+  target = { lat: place.lat, lon: place.lon };
+  localStorage.setItem(key, JSON.stringify(target));
+
+  map.setView([place.lat, place.lon], 17, {
+    animate: false
+  });
+
+  update();
+};
+
+    const renameButton = document.createElement("button");
+    renameButton.textContent = "Rename";
+    renameButton.className = "place-button";
+
+    renameButton.onclick = () => {
+      const newName = prompt("New place name:", place.name);
+      if (newName === null || !newName.trim()) return;
+
+      place.name = newName.trim();
+      localStorage.setItem(placesKey, JSON.stringify(places));
+      renderPlaces();
+      updatePlaceMarkers();
+    };
+
+    const deleteButton = document.createElement("button");
+    deleteButton.textContent = "Delete";
+    deleteButton.className = "place-button";
+
+    deleteButton.onclick = () => {
+      if (!confirm(`Delete "${place.name}"?`)) return;
+
+      places = places.filter(p => p.id !== place.id);
+      localStorage.setItem(placesKey, JSON.stringify(places));
+      renderPlaces();
+      updatePlaceMarkers();
+    };
+
+   const visibilityButton = document.createElement("button");
+visibilityButton.className = "place-button";
+
+visibilityButton.textContent =
+  place.visible === false ? "Show" : "Hide";
+
+visibilityButton.onclick = () => {
+  place.visible = place.visible === false;
+  localStorage.setItem(placesKey, JSON.stringify(places));
+  renderPlaces();
+  updatePlaceMarkers();
+};
+
+item.append(name, visibilityButton, renameButton, deleteButton);
+    list.appendChild(item);
+  });
+}
+function distance(a, b) {
+  const R = 6371000;
+  const rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad;
+  const dLon = (b.lon - a.lon) * rad;
+
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * rad) *
+    Math.cos(b.lat * rad) *
+    Math.sin(dLon / 2) ** 2;
+
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function update() {
+  updateMap();
+  document.body.classList.remove("near", "arrived");
+
+  if (!target) {
+    distanceEl.textContent = "-- m";
+    statusEl.textContent = "No saved location yet";
+    return;
+  }
+
+  if (!current) return;
+
+  const d = distance(current, target);
+  distanceEl.textContent = d.toFixed(1) + " m";
+
+  if (d <= 5) {
+    document.body.classList.add("arrived");
+    statusEl.textContent = "You've Arrived!";
+  } else if (d <= 25) {
+    document.body.classList.add("near");
+    statusEl.textContent = "Almost There!";
+  } else {
+    statusEl.textContent = "Heading to saved location";
+  }
+}
+
+document.getElementById("save").onclick = () => {
+  if (!current) {
+    alert("Waiting for GPS location.");
+    return;
+  }
+
+  const name = prompt("Place name:", `Place ${places.length + 1}`);
+  if (name === null) return;
+
+  const place = {
+    id: crypto.randomUUID(),
+    name: name.trim() || `Place ${places.length + 1}`,
+    lat: current.lat,
+    lon: current.lon,
+    color: "#e53935"
+  };
+
+  places.push(place);
+  localStorage.setItem(placesKey, JSON.stringify(places));
+
+  renderPlaces();
+  updatePlaceMarkers();
+  alert("Location saved!");
+};
+
+if ("geolocation" in navigator) {
+  navigator.geolocation.watchPosition(
+    pos => {
+      current = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude
+      };
+      update();
+    },
+    err => {
+      statusEl.textContent = "GPS error: " + err.message;
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 15000
+    }
+  );
+} else {
+  statusEl.textContent = "Geolocation is not supported by this browser.";
+}
+
+update();
+renderPlaces();
+updatePlaceMarkers();
+</script>
+</body>
+</html>
